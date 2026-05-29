@@ -21,6 +21,8 @@ Display mapping:
 
 The tmux window list keeps your manual window name and appends compact helper state in pane order, such as `[⏳]`, `[⏳ ⏳ 🔔✅]`, or `[⏳ 🔔❌ ⏸]`. Idle panes are omitted unless they need attention, and fully idle windows do not get a helper suffix.
 
+The outer terminal title uses the tmux session name as its stable base, so terminals such as Ghostty can show `[2] tmux-ai-helper` when the session is named `tmux-ai-helper`.
+
 Attention is separate from completion. `✅` means a tool finished; `🔔` means it finished while the pane/window was hidden. Selecting the pane/window clears `🔔` but leaves `✅`.
 
 The helper persists state in versioned tmux user options:
@@ -104,7 +106,7 @@ set -g @tmux_ai_helper_path "$HOME/.local/bin/tmux-ai-helper"
 # native bell behavior; tmux keeps only the durable unread count by default.
 set -g set-titles on
 set -g @tmux_ai_helper_title_mode "count"
-set -g set-titles-string '#{?#{>:#{@tmux_ai_helper_v1_attention_count},0},#{?#{==:#{@tmux_ai_helper_title_mode},off},,#{?#{==:#{@tmux_ai_helper_title_mode},emoji},🔔#{@tmux_ai_helper_v1_attention_count} ,[#{@tmux_ai_helper_v1_attention_count}] }},}#S:#I:#W#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}'
+set -g set-titles-string '#{?#{>:#{@tmux_ai_helper_v1_attention_count},0},#{?#{==:#{@tmux_ai_helper_title_mode},off},,#{?#{==:#{@tmux_ai_helper_title_mode},emoji},🔔#{@tmux_ai_helper_v1_attention_count} ,[#{@tmux_ai_helper_v1_attention_count}] }},}#S'
 
 # Ring the attached terminal when hidden AI work completes. Add "command" here
 # later to run @tmux_ai_helper_notify_command as well.
@@ -156,11 +158,21 @@ ssh ec2-user@your-host
 tmux attach
 ```
 
+Name the remote tmux session after the work context you want in your local terminal tab:
+
+```sh
+tmux new -s tmux-ai-helper
+# or, from inside an existing session:
+tmux rename-session tmux-ai-helper
+```
+
 Over SSH, the durable tmux state still works on the remote server:
 
 - remote tmux window list keeps your manual window name and appends helper state such as `[⏳ 🔔✅]`
-- remote tmux outer title shows `[N]` by default and uses the helper-managed window summary when available
+- remote tmux outer title shows `[N]` by default in front of the remote tmux session name
 - BEL travels through SSH to your local terminal as a best-effort notification
+
+For the cleanest Ghostty behavior, connect directly from Ghostty into the remote tmux session. If you run remote tmux inside a local tmux session, the local tmux server usually owns the outer terminal title, so the remote session name and count may not reach the Ghostty tab.
 
 Focus detection over SSH depends on the local terminal, SSH connection, and remote tmux terminal features. If focus reporting is unavailable, the helper falls back to tmux active-window visibility, so the durable tmux indicators still work.
 
@@ -173,7 +185,7 @@ The helper is designed for tmux 3.x. It does not require `allow-set-title`, so t
 - `@tmux_ai_helper_v1_display_title`: keeps the helper-owned display title separate from app-owned `#{pane_title}`. This avoids title races on tmux builds without `allow-set-title`.
 - `@tmux_ai_helper_path`: points tmux hooks at the installed binary. Change this if you install somewhere else.
 - `focus-events on`: lets tmux distinguish a tmux window that is selected from a terminal tab/window that is actually focused. Without this, hidden Ghostty tabs can look "visible" to tmux.
-- `set-titles on` with the provided `set-titles-string`: lets tmux show a persistent aggregate attention count, your manual window name, and the helper-managed window state in the outer terminal title. The default `@tmux_ai_helper_title_mode "count"` shows `[2] work:3:#123-fix-auth [⏳ ⏳ 🔔✅]`.
+- `set-titles on` with the provided `set-titles-string`: lets tmux show a persistent aggregate attention count in front of the tmux session name. Rename the tmux session to rename the terminal tab title.
 - `window-status-format` / `window-status-current-format`: keeps your manual window name visible and adds the helper-managed window summary next to it.
 - `@tmux_ai_helper_notify_backends "bell"`: sends a terminal bell when hidden AI work finishes. The terminal may turn this into a flash, sound, title marker, dock badge, or nothing depending on user settings.
 - `pipe-pane -o`: attaches the helper only when a pane does not already have a pipe.
@@ -188,11 +200,28 @@ set -g @tmux_ai_helper_title_mode "count"
 
 Supported modes:
 
-- `count`: show `[2] session:window` when there are unread AI completions.
-- `emoji`: show `🔔2 session:window`; use this only if you want tmux to own the bell glyph.
-- `off`: show only `session:window`.
+- `count`: show `[2] session-name` when there are unread AI completions.
+- `emoji`: show `🔔2 session-name`; use this only if you want tmux to own the bell glyph.
+- `off`: show only `session-name`.
 
 Native terminal bells are transient. A terminal may add and clear its own bell marker independently of tmux. For robustness, keep tmux's durable unread indicator separate from the terminal's native bell behavior.
+
+### Terminal Tab Names
+
+Do not use terminal-specific tab title overrides if you want tmux-ai-helper prefixes to remain visible. In Ghostty, "Change Tab Title..." overrides terminal title updates, so tmux cannot prepend `[1]` or `[2]` to that label.
+
+Instead, rename the tmux session. This works the same locally and over SSH when the remote tmux session owns the terminal title:
+
+```sh
+tmux rename-session tmux-ai-helper
+```
+
+The outer terminal title will then use:
+
+```text
+tmux-ai-helper
+[2] tmux-ai-helper
+```
 
 ### Notification hooks
 
