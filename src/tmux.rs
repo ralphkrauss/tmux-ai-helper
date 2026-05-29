@@ -13,6 +13,11 @@ pub const OPT_PERCENT: &str = "@tmux_ai_helper_v1_percent";
 pub const OPT_SOURCE: &str = "@tmux_ai_helper_v1_source";
 pub const OPT_ATTENTION_COUNT: &str = "@tmux_ai_helper_v1_attention_count";
 pub const OPT_WINDOW_SUMMARY: &str = "@tmux_ai_helper_v1_window_summary";
+pub const OPT_HOLD_KEY: &str = "@tmux_ai_helper_v1_hold_key";
+pub const OPT_HOLD_LABEL: &str = "@tmux_ai_helper_v1_hold_label";
+pub const OPT_HOLD_SINCE: &str = "@tmux_ai_helper_v1_hold_since";
+pub const OPT_HOLD_STATE_ORDER: &str = "@tmux_ai_helper_hold_state_order";
+pub const OPT_HOLD_STATE_PREFIX: &str = "@tmux_ai_helper_hold_state_";
 pub const OPT_NOTIFY_BACKENDS: &str = "@tmux_ai_helper_notify_backends";
 pub const OPT_NOTIFY_COMMAND: &str = "@tmux_ai_helper_notify_command";
 
@@ -65,6 +70,14 @@ pub fn set_window_option(window: &str, option: &str, value: &str) -> io::Result<
     run_status(["set-option", "-w", "-q", "-t", window, option, value])
 }
 
+pub fn unset_window_option(window: &str, option: &str) -> io::Result<()> {
+    run_status(["set-option", "-w", "-q", "-u", "-t", window, option])
+}
+
+pub fn get_global_option(option: &str) -> Option<String> {
+    show_option(["show-options", "-g", "-qv", option])
+}
+
 pub fn get_session_option(session: &str, option: &str) -> Option<String> {
     show_option(["show-options", "-qv", "-t", session, option])
 }
@@ -90,6 +103,10 @@ pub fn list_client_ttys(session: &str) -> Vec<String> {
 
 pub fn window_id_for_pane(pane: &str) -> Option<String> {
     read_format(pane, "#{window_id}")
+}
+
+pub fn current_window_id() -> Option<String> {
+    read_current_format("#{window_id}")
 }
 
 pub fn session_id_for_target(target: &str) -> Option<String> {
@@ -132,6 +149,11 @@ pub fn sync_window_state_for_pane(pane: &str) -> io::Result<()> {
 }
 
 pub fn sync_window_attention(window: &str) -> io::Result<bool> {
+    if window_has_hold(window) {
+        set_window_option(window, OPT_ATTENTION, bool_value(false))?;
+        return Ok(false);
+    }
+
     let has_attention = list_panes(window).into_iter().any(|pane| {
         get_pane_option(&pane, OPT_ATTENTION)
             .as_deref()
@@ -152,14 +174,30 @@ pub fn sync_session_attention_count(session: &str) -> io::Result<usize> {
     let count = list_windows(session)
         .into_iter()
         .filter(|window| {
-            get_window_option(window, OPT_ATTENTION)
-                .as_deref()
-                .is_some_and(is_truthy)
+            !window_has_hold(window)
+                && get_window_option(window, OPT_ATTENTION)
+                    .as_deref()
+                    .is_some_and(is_truthy)
         })
         .count();
 
     set_session_option(session, OPT_ATTENTION_COUNT, &count.to_string())?;
     Ok(count)
+}
+
+pub fn sync_window_state(window: &str) -> io::Result<()> {
+    sync_window_attention(window)?;
+    sync_window_summary(window)?;
+    if let Some(session) = session_id_for_target(window) {
+        sync_session_attention_count(&session)?;
+    }
+    Ok(())
+}
+
+pub fn window_has_hold(window: &str) -> bool {
+    get_window_option(window, OPT_HOLD_LABEL)
+        .as_deref()
+        .is_some_and(|label| !label.trim().is_empty())
 }
 
 pub fn bool_value(value: bool) -> &'static str {
@@ -240,6 +278,23 @@ fn show_option<const N: usize>(args: [&str; N]) -> Option<String> {
         .trim_end()
         .to_owned();
     (!value.is_empty()).then_some(value)
+}
+
+fn read_current_format(format: &str) -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["display-message", "-p", format])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned(),
+    )
 }
 
 fn list_items<const N: usize>(args: [&str; N]) -> Vec<String> {

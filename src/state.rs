@@ -186,10 +186,11 @@ impl PaneState {
     }
 
     fn commit(&mut self, previous_activity: Activity) -> io::Result<()> {
+        let pane_visible = tmux::is_pane_visible(&self.pane) || window_is_held_for_pane(&self.pane);
         let transition = attention_transition(
             previous_activity,
             self.activity,
-            tmux::is_pane_visible(&self.pane),
+            pane_visible,
             self.attention,
         );
 
@@ -360,6 +361,12 @@ fn persist_snapshot(pane: &str, snapshot: &Snapshot) -> io::Result<()> {
 fn parse_stored_percent(value: &str) -> Option<u8> {
     let value = value.parse::<u8>().ok()?;
     (value <= 100).then_some(value)
+}
+
+fn window_is_held_for_pane(pane: &str) -> bool {
+    tmux::window_id_for_pane(pane)
+        .as_deref()
+        .is_some_and(tmux::window_has_hold)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

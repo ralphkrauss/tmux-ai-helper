@@ -21,6 +21,8 @@ Display mapping:
 
 The tmux window list keeps your manual window name and appends compact helper state in pane order, such as `[⏳]`, `[⏳ ⏳ 🔔✅]`, or `[⏳ 🔔❌ ⏸]`. Idle panes are omitted unless they need attention, and fully idle windows do not get a helper suffix.
 
+You can also manually put a window on hold with a configured label, such as `[🧪 Test]` or `[👀 Review]`. Hold labels take precedence over AI progress and attention markers for that window.
+
 The outer terminal title uses the tmux session name as its stable base, so terminals such as Ghostty can show `[2] tmux-ai-helper` when the session is named `tmux-ai-helper`.
 
 Attention is separate from completion. `✅` means a tool finished; `🔔` means it finished while the pane/window was hidden. Selecting the pane/window clears `🔔` but leaves `✅`.
@@ -28,7 +30,7 @@ Attention is separate from completion. `✅` means a tool finished; `🔔` means
 The helper persists state in versioned tmux user options:
 
 - pane options: `@tmux_ai_helper_v1_activity`, `@tmux_ai_helper_v1_attention`, `@tmux_ai_helper_v1_base_title`, `@tmux_ai_helper_v1_display_title`, `@tmux_ai_helper_v1_percent`, `@tmux_ai_helper_v1_source`
-- window options: `@tmux_ai_helper_v1_attention`, `@tmux_ai_helper_v1_window_summary`
+- window options: `@tmux_ai_helper_v1_attention`, `@tmux_ai_helper_v1_window_summary`, `@tmux_ai_helper_v1_hold_key`, `@tmux_ai_helper_v1_hold_label`, `@tmux_ai_helper_v1_hold_since`
 - session option: `@tmux_ai_helper_v1_attention_count`
 
 ## Install
@@ -108,6 +110,14 @@ set -g set-titles on
 set -g @tmux_ai_helper_title_mode "count"
 set -g set-titles-string '#{?#{>:#{@tmux_ai_helper_v1_attention_count},0},#{?#{==:#{@tmux_ai_helper_title_mode},off},,#{?#{==:#{@tmux_ai_helper_title_mode},emoji},🔔#{@tmux_ai_helper_v1_attention_count} ,[#{@tmux_ai_helper_v1_attention_count}] }},}#S'
 
+# Manual hold states for windows that are waiting on something external.
+set -g @tmux_ai_helper_hold_state_order "test review blocked parked"
+set -g @tmux_ai_helper_hold_state_test "🧪 Test"
+set -g @tmux_ai_helper_hold_state_review "👀 Review"
+set -g @tmux_ai_helper_hold_state_blocked "⛔ Blocked"
+set -g @tmux_ai_helper_hold_state_parked "📌 Parked"
+bind-key H run-shell -b '"#{@tmux_ai_helper_path}" hold-menu "#{pane_id}"'
+
 # Ring the attached terminal when hidden AI work completes. Add "command" here
 # later to run @tmux_ai_helper_notify_command as well.
 set -g @tmux_ai_helper_notify_backends "bell"
@@ -115,8 +125,8 @@ set -g @tmux_ai_helper_notify_command ""
 
 # Show helper-managed display titles in tmux's window list. The window-level marker
 # covers split-pane cases where a hidden pane in the window needs attention.
-setw -g window-status-format '#I:#W#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}#{?window_flags,#{window_flags}, }'
-setw -g window-status-current-format '#I:#W#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}#{?window_flags,#{window_flags}, }'
+setw -g window-status-format '#I:#W#{?#{@tmux_ai_helper_v1_hold_label}, [#{@tmux_ai_helper_v1_hold_label}],#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}}#{?window_flags,#{window_flags}, }'
+setw -g window-status-current-format '#I:#W#{?#{@tmux_ai_helper_v1_hold_label}, [#{@tmux_ai_helper_v1_hold_label}],#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}}#{?window_flags,#{window_flags}, }'
 setw -g pane-border-format '#{?pane_active,#[reverse],}#{pane_index}#[default] "#{?#{@tmux_ai_helper_v1_display_title},#{@tmux_ai_helper_v1_display_title},#{pane_title}}"'
 set -g status-right '#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}"#{=21:#{?#{@tmux_ai_helper_v1_display_title},#{@tmux_ai_helper_v1_display_title},#{pane_title}}}" %H:%M %d-%b-%y'
 
@@ -223,6 +233,69 @@ tmux-ai-helper
 [2] tmux-ai-helper
 ```
 
+### Manual Window Holds
+
+Use holds for feature windows that are waiting on something external, such as testing or review feedback, or for work you intentionally parked. A held window shows the hold label in the tmux window list instead of the AI progress summary:
+
+```text
+3:auth-flow [🧪 Test]
+4:billing [👀 Review]
+5:deploy [⛔ Blocked]
+6:search [📌 Parked]
+```
+
+Held windows also suppress AI attention for that window. If an AI process finishes while the window is held, the hold label remains the visible state and the window does not increment the session unread count.
+
+The default states are:
+
+```tmux
+set -g @tmux_ai_helper_hold_state_order "test review blocked parked"
+set -g @tmux_ai_helper_hold_state_test "🧪 Test"
+set -g @tmux_ai_helper_hold_state_review "👀 Review"
+set -g @tmux_ai_helper_hold_state_blocked "⛔ Blocked"
+set -g @tmux_ai_helper_hold_state_parked "📌 Parked"
+```
+
+Set or clear a hold manually:
+
+```sh
+tmux-ai-helper hold test
+tmux-ai-helper hold review
+tmux-ai-helper hold blocked
+tmux-ai-helper hold parked
+tmux-ai-helper hold-clear
+```
+
+The older `pr` key is accepted as an alias for `review`.
+
+The recommended key binding opens a tmux menu for the current window:
+
+```tmux
+bind-key H run-shell -b '"#{@tmux_ai_helper_path}" hold-menu "#{pane_id}"'
+```
+
+Add your own states by adding the key to `@tmux_ai_helper_hold_state_order` and defining its label:
+
+```tmux
+set -g @tmux_ai_helper_hold_state_order "test review blocked parked design"
+set -g @tmux_ai_helper_hold_state_design "🎨 Design"
+```
+
+State keys may contain letters, numbers, `_`, and `-`; labels may contain spaces and emoji. The helper normalizes the legacy `pr` key to `review` and deduplicates configured keys, so older configs using `pr` keep working without producing a second review item.
+
+To inspect hold state across all windows:
+
+```sh
+tmux list-windows -a -F '#{session_name}:#{window_index}:#{window_name} hold=#{@tmux_ai_helper_v1_hold_label} ai=#{@tmux_ai_helper_v1_window_summary}'
+```
+
+If the hold menu does not open, check that the installed helper path is correct and that the key binding is loaded:
+
+```sh
+tmux show-options -gqv @tmux_ai_helper_path
+tmux list-keys H
+```
+
 ### Notification hooks
 
 The default notification backend is:
@@ -253,6 +326,7 @@ The command receives these environment variables:
 - The helper uses one idle process per attached pane. It reads with blocking I/O and only calls tmux when parsed state changes or attention is created/cleared.
 - tmux supports only one `pipe-pane` command per pane. If you use `pipe-pane` for logging, it will conflict with this helper in that pane.
 - The helper-managed pane display title is stored in `@tmux_ai_helper_v1_display_title`; the compact per-window summary is stored in `@tmux_ai_helper_v1_window_summary`. On attach, the helper strips old helper-owned prefixes such as `🔔`, `⏳`, `✅`, `❌`, and `⏸`, then regenerates those options from tmux state. This prevents emoji stacking after detach/reattach or helper restarts while leaving `#{pane_title}` app-owned.
+- Manual holds are stored in tmux window options. They survive detach/reattach for as long as the tmux server is running, but they are not written to disk.
 - If the install path changes, update `@tmux_ai_helper_path` in `~/.tmux.conf`.
 - After rebuilding the helper, reinstall it and restart existing pane listeners:
 
