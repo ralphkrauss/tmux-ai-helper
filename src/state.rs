@@ -33,6 +33,9 @@ impl PaneState {
         let raw_title = tmux::read_format(pane, "#{pane_title}").unwrap_or_default();
         let parsed = parse_title(&raw_title);
         let window_name = tmux::read_format(pane, "#{window_name}").unwrap_or_default();
+        let stored_display_title = tmux::get_pane_option(pane, tmux::OPT_DISPLAY_TITLE);
+        let parsed_display = stored_display_title.as_deref().map(parse_title);
+        let parsed_display_activity = parsed_display.as_ref().and_then(|parsed| parsed.activity);
 
         let stored_base = tmux::get_pane_option(pane, tmux::OPT_BASE_TITLE);
         let stored_activity = tmux::get_pane_option(pane, tmux::OPT_ACTIVITY)
@@ -50,6 +53,10 @@ impl PaneState {
 
         let base_title = first_non_empty([
             stored_base.as_deref().unwrap_or_default(),
+            parsed_display
+                .as_ref()
+                .map(|parsed| parsed.base.as_str())
+                .unwrap_or_default(),
             parsed.base.as_str(),
             window_name.as_str(),
         ])
@@ -57,11 +64,16 @@ impl PaneState {
         .to_owned();
 
         let activity = stored_activity
+            .or(parsed_display_activity)
             .or(parsed.activity)
             .unwrap_or(Activity::Idle);
-        let attention = stored_attention.unwrap_or(parsed.attention);
+        let attention = stored_attention
+            .or_else(|| parsed_display.as_ref().map(|parsed| parsed.attention))
+            .unwrap_or(parsed.attention);
         let source = stored_source.or_else(|| {
-            (parsed.activity == Some(Activity::Active)).then_some(ActivitySource::TitleSpinner)
+            (parsed_display_activity == Some(Activity::Active)
+                || parsed.activity == Some(Activity::Active))
+            .then_some(ActivitySource::TitleSpinner)
         });
 
         Self {
@@ -71,8 +83,10 @@ impl PaneState {
             attention,
             source,
             saw_osc94: false,
-            percent: stored_percent.or(parsed.percent),
-            displayed_title: None,
+            percent: stored_percent
+                .or_else(|| parsed_display.as_ref().and_then(|parsed| parsed.percent))
+                .or(parsed.percent),
+            displayed_title: stored_display_title,
             persisted: None,
         }
     }
@@ -194,8 +208,7 @@ impl PaneState {
 
     fn apply_title(&mut self) -> io::Result<()> {
         let snapshot = self.snapshot();
-        let attention_changed = self.persisted.as_ref().map(|persisted| persisted.attention)
-            != Some(snapshot.attention);
+        let snapshot_changed = self.persisted.as_ref() != Some(&snapshot);
         let title = display_title(
             snapshot.activity,
             snapshot.attention,
@@ -203,18 +216,19 @@ impl PaneState {
             &snapshot.base_title,
         );
 
-        if self.persisted.as_ref() != Some(&snapshot) {
+        if snapshot_changed {
             persist_snapshot(&self.pane, &snapshot)?;
             self.persisted = Some(snapshot);
         }
 
-        if self.displayed_title.as_deref() != Some(title.as_str()) {
-            tmux::set_pane_title(&self.pane, &title)?;
+        let title_changed = self.displayed_title.as_deref() != Some(title.as_str());
+        if title_changed {
+            tmux::set_pane_option(&self.pane, tmux::OPT_DISPLAY_TITLE, &title)?;
             self.displayed_title = Some(title);
         }
 
-        if attention_changed {
-            tmux::sync_attention_for_pane(&self.pane)?;
+        if snapshot_changed || title_changed {
+            tmux::sync_window_state_for_pane(&self.pane)?;
         }
 
         Ok(())
@@ -279,11 +293,14 @@ pub fn clear_pane(pane: &str) -> io::Result<()> {
     let stored_attention = tmux::get_pane_option(pane, tmux::OPT_ATTENTION)
         .as_deref()
         .is_some_and(tmux::is_truthy);
+    let display_attention = tmux::get_pane_option(pane, tmux::OPT_DISPLAY_TITLE)
+        .map(|title| parse_title(&title).attention)
+        .unwrap_or(false);
     let title_attention = tmux::read_format(pane, "#{pane_title}")
         .map(|title| parse_title(&title).attention)
         .unwrap_or(false);
 
-    if !stored_attention && !title_attention {
+    if !stored_attention && !display_attention && !title_attention {
         return Ok(());
     }
 
@@ -298,6 +315,7 @@ pub fn clear_window(window: &str) -> io::Result<()> {
     }
 
     tmux::sync_window_attention(window)?;
+    tmux::sync_window_summary(window)?;
     if let Some(session) = tmux::session_id_for_target(window) {
         tmux::sync_session_attention_count(&session)?;
     }

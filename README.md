@@ -1,8 +1,8 @@
 # tmux-ai-helper
 
-Tiny tmux helper that listens for terminal progress/title signals from tools such as Claude Code and Codex and maps them into tmux pane titles and attention markers.
+Tiny tmux helper that listens for terminal progress/title signals from tools such as Claude Code and Codex and maps them into tmux status titles and attention markers.
 
-It does not wrap or replace any AI binary. tmux starts it with `pipe-pane`; the helper reads terminal output, keeps durable state in tmux user options, and regenerates pane titles from that state.
+It does not wrap or replace any AI binary. tmux starts it with `pipe-pane`; the helper reads terminal output, keeps durable state in tmux user options, and regenerates helper-managed display titles from that state.
 
 Supported signals:
 
@@ -19,12 +19,14 @@ Display mapping:
 - paused: `⏸ <title>`
 - needs attention: `🔔 ✅ <title>` or `🔔 ❌ <title>`
 
+The tmux window list keeps your manual window name and appends compact helper state in pane order, such as `[⏳]`, `[⏳ ⏳ 🔔✅]`, or `[⏳ 🔔❌ ⏸]`. Idle panes are omitted unless they need attention, and fully idle windows do not get a helper suffix.
+
 Attention is separate from completion. `✅` means a tool finished; `🔔` means it finished while the pane/window was hidden. Selecting the pane/window clears `🔔` but leaves `✅`.
 
 The helper persists state in versioned tmux user options:
 
-- pane options: `@tmux_ai_helper_v1_activity`, `@tmux_ai_helper_v1_attention`, `@tmux_ai_helper_v1_base_title`, `@tmux_ai_helper_v1_percent`, `@tmux_ai_helper_v1_source`
-- window option: `@tmux_ai_helper_v1_attention`
+- pane options: `@tmux_ai_helper_v1_activity`, `@tmux_ai_helper_v1_attention`, `@tmux_ai_helper_v1_base_title`, `@tmux_ai_helper_v1_display_title`, `@tmux_ai_helper_v1_percent`, `@tmux_ai_helper_v1_source`
+- window options: `@tmux_ai_helper_v1_attention`, `@tmux_ai_helper_v1_window_summary`
 - session option: `@tmux_ai_helper_v1_attention_count`
 
 ## Install
@@ -95,25 +97,26 @@ Add this to `~/.tmux.conf`:
 set -g focus-events on
 set -g @tmux_ai_helper_path "$HOME/.local/bin/tmux-ai-helper"
 
-# Let tmux-ai-helper own pane titles. Applications can still emit OSC title
-# sequences, but tmux will not apply them directly and race the helper.
-set -g allow-set-title off
+# tmux-ai-helper writes its normalized display title to a pane option, so
+# #{pane_title} can remain app-owned on tmux builds without allow-set-title.
 
 # Let tmux, not applications, own the outer terminal title. The terminal owns
 # native bell behavior; tmux keeps only the durable unread count by default.
 set -g set-titles on
 set -g @tmux_ai_helper_title_mode "count"
-set -g set-titles-string '#{?#{>:#{@tmux_ai_helper_v1_attention_count},0},#{?#{==:#{@tmux_ai_helper_title_mode},off},,#{?#{==:#{@tmux_ai_helper_title_mode},emoji},🔔#{@tmux_ai_helper_v1_attention_count} ,[#{@tmux_ai_helper_v1_attention_count}] }},}#S:#I:#W'
+set -g set-titles-string '#{?#{>:#{@tmux_ai_helper_v1_attention_count},0},#{?#{==:#{@tmux_ai_helper_title_mode},off},,#{?#{==:#{@tmux_ai_helper_title_mode},emoji},🔔#{@tmux_ai_helper_v1_attention_count} ,[#{@tmux_ai_helper_v1_attention_count}] }},}#S:#I:#W#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}'
 
 # Ring the attached terminal when hidden AI work completes. Add "command" here
 # later to run @tmux_ai_helper_notify_command as well.
 set -g @tmux_ai_helper_notify_backends "bell"
 set -g @tmux_ai_helper_notify_command ""
 
-# Show helper-managed pane titles in tmux's window list. The window-level marker
+# Show helper-managed display titles in tmux's window list. The window-level marker
 # covers split-pane cases where a hidden pane in the window needs attention.
-setw -g window-status-format '#I:#{?#{&&:#{==:#{@tmux_ai_helper_v1_attention},1},#{==:#{m/r:^🔔,#{pane_title}},0}},🔔 ,}#{?pane_title,#{pane_title},#{window_name}}#{?window_flags,#{window_flags}, }'
-setw -g window-status-current-format '#I:#{?#{&&:#{==:#{@tmux_ai_helper_v1_attention},1},#{==:#{m/r:^🔔,#{pane_title}},0}},🔔 ,}#{?pane_title,#{pane_title},#{window_name}}#{?window_flags,#{window_flags}, }'
+setw -g window-status-format '#I:#W#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}#{?window_flags,#{window_flags}, }'
+setw -g window-status-current-format '#I:#W#{?#{@tmux_ai_helper_v1_window_summary}, [#{@tmux_ai_helper_v1_window_summary}],}#{?window_flags,#{window_flags}, }'
+setw -g pane-border-format '#{?pane_active,#[reverse],}#{pane_index}#[default] "#{?#{@tmux_ai_helper_v1_display_title},#{@tmux_ai_helper_v1_display_title},#{pane_title}}"'
+set -g status-right '#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}"#{=21:#{?#{@tmux_ai_helper_v1_display_title},#{@tmux_ai_helper_v1_display_title},#{pane_title}}}" %H:%M %d-%b-%y'
 
 # Attach the helper automatically to new panes.
 set-hook -g after-new-session 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; pane=\"#{pane_id}\"; test -z \"\$pane\" || test ! -x \"\$helper\" || \"\$helper\" attach \"\$pane\""'
@@ -155,19 +158,23 @@ tmux attach
 
 Over SSH, the durable tmux state still works on the remote server:
 
-- remote tmux window list shows `🔔 ✅ <title>` for hidden completions
-- remote tmux outer title shows `[N]` by default
+- remote tmux window list keeps your manual window name and appends helper state such as `[⏳ 🔔✅]`
+- remote tmux outer title shows `[N]` by default and uses the helper-managed window summary when available
 - BEL travels through SSH to your local terminal as a best-effort notification
 
 Focus detection over SSH depends on the local terminal, SSH connection, and remote tmux terminal features. If focus reporting is unavailable, the helper falls back to tmux active-window visibility, so the durable tmux indicators still work.
 
+### tmux compatibility
+
+The helper is designed for tmux 3.x. It does not require `allow-set-title`, so the same configuration works on builds that have that option and on builds, such as tmux 3.4, that do not. Applications may still update tmux's built-in `#{pane_title}` with OSC title sequences; tmux-ai-helper stores its normalized pane display in `@tmux_ai_helper_v1_display_title` and its ordered window state suffix in `@tmux_ai_helper_v1_window_summary`.
+
 ### Why these settings
 
-- `allow-set-title off`: prevents apps from directly overwriting `#{pane_title}`. The helper reads title/progress sequences and applies a normalized title with `tmux select-pane -T`.
+- `@tmux_ai_helper_v1_display_title`: keeps the helper-owned display title separate from app-owned `#{pane_title}`. This avoids title races on tmux builds without `allow-set-title`.
 - `@tmux_ai_helper_path`: points tmux hooks at the installed binary. Change this if you install somewhere else.
 - `focus-events on`: lets tmux distinguish a tmux window that is selected from a terminal tab/window that is actually focused. Without this, hidden Ghostty tabs can look "visible" to tmux.
-- `set-titles on` with the provided `set-titles-string`: lets tmux show a persistent aggregate attention count in the outer terminal title. The default `@tmux_ai_helper_title_mode "count"` shows `[2] work:3:api`.
-- `window-status-format` / `window-status-current-format`: keeps the helper-managed title visible in the tmux window list.
+- `set-titles on` with the provided `set-titles-string`: lets tmux show a persistent aggregate attention count, your manual window name, and the helper-managed window state in the outer terminal title. The default `@tmux_ai_helper_title_mode "count"` shows `[2] work:3:#123-fix-auth [⏳ ⏳ 🔔✅]`.
+- `window-status-format` / `window-status-current-format`: keeps your manual window name visible and adds the helper-managed window summary next to it.
 - `@tmux_ai_helper_notify_backends "bell"`: sends a terminal bell when hidden AI work finishes. The terminal may turn this into a flash, sound, title marker, dock badge, or nothing depending on user settings.
 - `pipe-pane -o`: attaches the helper only when a pane does not already have a pipe.
 
@@ -216,7 +223,7 @@ The command receives these environment variables:
 
 - The helper uses one idle process per attached pane. It reads with blocking I/O and only calls tmux when parsed state changes or attention is created/cleared.
 - tmux supports only one `pipe-pane` command per pane. If you use `pipe-pane` for logging, it will conflict with this helper in that pane.
-- Pane titles are display output, not durable state. On attach, the helper strips old helper-owned prefixes such as `🔔`, `⏳`, `✅`, `❌`, and `⏸`, then regenerates the title from tmux options. This prevents emoji stacking after detach/reattach or helper restarts.
+- The helper-managed pane display title is stored in `@tmux_ai_helper_v1_display_title`; the compact per-window summary is stored in `@tmux_ai_helper_v1_window_summary`. On attach, the helper strips old helper-owned prefixes such as `🔔`, `⏳`, `✅`, `❌`, and `⏸`, then regenerates those options from tmux state. This prevents emoji stacking after detach/reattach or helper restarts while leaving `#{pane_title}` app-owned.
 - If the install path changes, update `@tmux_ai_helper_path` in `~/.tmux.conf`.
 - After rebuilding the helper, reinstall it and restart existing pane listeners:
 
@@ -229,7 +236,7 @@ tmux source-file ~/.tmux.conf
 To confirm the helper is attached to panes:
 
 ```sh
-tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} pipe=#{pane_pipe} title=#{pane_title}'
+tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} pipe=#{pane_pipe} window=#{@tmux_ai_helper_v1_window_summary} title=#{@tmux_ai_helper_v1_display_title} raw=#{pane_title}'
 ```
 
 `pipe=1` means a pane has a `pipe-pane` listener attached.

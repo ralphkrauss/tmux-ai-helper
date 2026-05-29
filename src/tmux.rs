@@ -3,12 +3,16 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
+use crate::activity::Activity;
+
 pub const OPT_ACTIVITY: &str = "@tmux_ai_helper_v1_activity";
 pub const OPT_ATTENTION: &str = "@tmux_ai_helper_v1_attention";
 pub const OPT_BASE_TITLE: &str = "@tmux_ai_helper_v1_base_title";
+pub const OPT_DISPLAY_TITLE: &str = "@tmux_ai_helper_v1_display_title";
 pub const OPT_PERCENT: &str = "@tmux_ai_helper_v1_percent";
 pub const OPT_SOURCE: &str = "@tmux_ai_helper_v1_source";
 pub const OPT_ATTENTION_COUNT: &str = "@tmux_ai_helper_v1_attention_count";
+pub const OPT_WINDOW_SUMMARY: &str = "@tmux_ai_helper_v1_window_summary";
 pub const OPT_NOTIFY_BACKENDS: &str = "@tmux_ai_helper_notify_backends";
 pub const OPT_NOTIFY_COMMAND: &str = "@tmux_ai_helper_notify_command";
 
@@ -43,10 +47,6 @@ pub fn read_format(target: &str, format: &str) -> Option<String> {
             .trim_end()
             .to_owned(),
     )
-}
-
-pub fn set_pane_title(pane: &str, title: &str) -> io::Result<()> {
-    run_status(["select-pane", "-t", pane, "-T", title])
 }
 
 pub fn get_pane_option(pane: &str, option: &str) -> Option<String> {
@@ -117,7 +117,7 @@ pub fn is_pane_visible(pane: &str) -> bool {
     active_clients_are_visible(active_client_ttys, &client_focus_states(session))
 }
 
-pub fn sync_attention_for_pane(pane: &str) -> io::Result<()> {
+pub fn sync_window_state_for_pane(pane: &str) -> io::Result<()> {
     let Some(window) = window_id_for_pane(pane) else {
         return Ok(());
     };
@@ -126,6 +126,7 @@ pub fn sync_attention_for_pane(pane: &str) -> io::Result<()> {
     };
 
     sync_window_attention(&window)?;
+    sync_window_summary(&window)?;
     sync_session_attention_count(&session)?;
     Ok(())
 }
@@ -139,6 +140,12 @@ pub fn sync_window_attention(window: &str) -> io::Result<bool> {
 
     set_window_option(window, OPT_ATTENTION, bool_value(has_attention))?;
     Ok(has_attention)
+}
+
+pub fn sync_window_summary(window: &str) -> io::Result<String> {
+    let summary = window_summary(&pane_summaries(window));
+    set_window_option(window, OPT_WINDOW_SUMMARY, &summary)?;
+    Ok(summary)
 }
 
 pub fn sync_session_attention_count(session: &str) -> io::Result<usize> {
@@ -165,6 +172,62 @@ pub fn bool_value(value: bool) -> &'static str {
 
 pub fn is_truthy(value: &str) -> bool {
     !matches!(value.trim(), "" | "0" | "false" | "off" | "no")
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PaneSummary {
+    activity: Activity,
+    attention: bool,
+}
+
+fn pane_summaries(window: &str) -> Vec<PaneSummary> {
+    list_items([
+        "list-panes",
+        "-t",
+        window,
+        "-F",
+        "#{?#{@tmux_ai_helper_v1_activity},#{@tmux_ai_helper_v1_activity},idle}\t#{@tmux_ai_helper_v1_attention}",
+    ])
+    .into_iter()
+    .map(|line| {
+        let mut parts = line.split('\t');
+        let activity = parts
+            .next()
+            .and_then(Activity::from_str)
+            .unwrap_or(Activity::Idle);
+        let attention = parts.next().is_some_and(is_truthy);
+
+        PaneSummary {
+            activity,
+            attention,
+        }
+    })
+    .collect()
+}
+
+fn window_summary(panes: &[PaneSummary]) -> String {
+    panes
+        .iter()
+        .filter_map(pane_badge)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn pane_badge(pane: &PaneSummary) -> Option<String> {
+    let activity = match pane.activity {
+        Activity::Idle => None,
+        Activity::Active => Some("⏳"),
+        Activity::Done => Some("✅"),
+        Activity::Error => Some("❌"),
+        Activity::Paused => Some("⏸"),
+    };
+
+    match (pane.attention, activity) {
+        (false, None) => None,
+        (false, Some(activity)) => Some(activity.to_owned()),
+        (true, None) => Some("🔔".to_owned()),
+        (true, Some(activity)) => Some(format!("🔔{activity}")),
+    }
 }
 
 fn show_option<const N: usize>(args: [&str; N]) -> Option<String> {
@@ -363,5 +426,87 @@ mod tests {
 
         assert!(active_clients_are_visible("/dev/ttys010", &states));
         assert!(!active_clients_are_visible("/dev/ttys011", &states));
+    }
+
+    #[test]
+    fn window_summary_summarizes_single_pane_state() {
+        let panes = vec![PaneSummary {
+            activity: Activity::Active,
+            attention: false,
+        }];
+
+        assert_eq!(window_summary(&panes), "⏳");
+    }
+
+    #[test]
+    fn window_summary_is_empty_when_panes_are_idle() {
+        let panes = vec![
+            PaneSummary {
+                activity: Activity::Idle,
+                attention: false,
+            },
+            PaneSummary {
+                activity: Activity::Idle,
+                attention: false,
+            },
+        ];
+
+        assert_eq!(window_summary(&panes), "");
+    }
+
+    #[test]
+    fn window_summary_follows_pane_order() {
+        let panes = vec![
+            PaneSummary {
+                activity: Activity::Active,
+                attention: false,
+            },
+            PaneSummary {
+                activity: Activity::Active,
+                attention: false,
+            },
+            PaneSummary {
+                activity: Activity::Done,
+                attention: true,
+            },
+        ];
+
+        assert_eq!(window_summary(&panes), "⏳ ⏳ 🔔✅");
+    }
+
+    #[test]
+    fn window_summary_keeps_errors_in_pane_order() {
+        let panes = vec![
+            PaneSummary {
+                activity: Activity::Active,
+                attention: false,
+            },
+            PaneSummary {
+                activity: Activity::Error,
+                attention: true,
+            },
+            PaneSummary {
+                activity: Activity::Paused,
+                attention: false,
+            },
+        ];
+
+        assert_eq!(window_summary(&panes), "⏳ 🔔❌ ⏸");
+    }
+
+    #[test]
+    fn window_summary_shows_attention_for_idle_panes() {
+        let panes = vec![
+            PaneSummary {
+                activity: Activity::Idle,
+                attention: true,
+            },
+            PaneSummary {
+                activity: Activity::Done,
+                attention: false,
+            },
+        ];
+
+        assert_eq!(window_summary(&panes), "🔔 ✅");
     }
 }

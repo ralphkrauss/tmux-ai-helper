@@ -2,7 +2,7 @@
 name = "tmux-ai-helper"
 version = "0.1.0"
 edition = "2021"
-description = "Tiny tmux helper for mapping AI terminal progress signals into pane titles"
+description = "Tiny tmux helper for mapping AI terminal progress signals into tmux status titles"
 license = "MIT"
 
 [dependencies]
