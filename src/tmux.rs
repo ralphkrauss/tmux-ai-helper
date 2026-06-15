@@ -1,7 +1,9 @@
 use std::env;
 use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::thread;
+use std::time::Duration;
 
 use crate::activity::Activity;
 
@@ -21,6 +23,15 @@ pub const OPT_HOLD_STATE_PREFIX: &str = "@tmux_ai_helper_hold_state_";
 pub const OPT_NOTIFY_BACKENDS: &str = "@tmux_ai_helper_notify_backends";
 pub const OPT_NOTIFY_COMMAND: &str = "@tmux_ai_helper_notify_command";
 
+const ATTACH_ALL_ATTEMPTS: usize = 4;
+const ATTACH_ALL_RETRY_DELAY: Duration = Duration::from_millis(150);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PanePipe {
+    pane: String,
+    pipe: bool,
+}
+
 pub fn attach(pane: &str) -> io::Result<()> {
     if read_format(pane, "#{pane_pipe}").as_deref() == Some("1") {
         return Ok(());
@@ -35,6 +46,36 @@ pub fn attach(pane: &str) -> io::Result<()> {
     );
 
     run_status(["pipe-pane", "-t", pane, "-o", "-O", &command])
+}
+
+pub fn attach_all(session: Option<&str>) -> io::Result<()> {
+    let panes = match list_panes_for_attach_with_retry(session) {
+        Ok(panes) => panes,
+        Err(err) => {
+            let message = format!("tmux-ai-helper attach-all failed: {err}");
+            display_message(&message);
+            return Err(io::Error::other(message));
+        }
+    };
+    let mut failures = Vec::new();
+
+    for pane in panes {
+        if pane.pipe {
+            continue;
+        }
+
+        if let Err(err) = attach_with_retry(&pane.pane) {
+            failures.push(format!("{}: {err}", pane.pane));
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        let message = format!("tmux-ai-helper attach-all failed: {}", failures.join("; "));
+        display_message(&message);
+        Err(io::Error::other(message))
+    }
 }
 
 pub fn read_format(target: &str, format: &str) -> Option<String> {
@@ -388,15 +429,126 @@ fn termfeatures_contains_focus(termfeatures: &str) -> bool {
     termfeatures.split(',').any(|feature| feature == "focus")
 }
 
-fn run_status<const N: usize>(args: [&str; N]) -> io::Result<()> {
-    let status = Command::new("tmux").args(args).status()?;
+fn attach_with_retry(pane: &str) -> io::Result<()> {
+    let mut last_error = None;
 
-    if status.success() {
+    for attempt in 1..=ATTACH_ALL_ATTEMPTS {
+        match attach(pane) {
+            Ok(()) if read_format(pane, "#{pane_pipe}").as_deref() == Some("1") => return Ok(()),
+            Ok(()) => {
+                last_error = Some("pane still reports pipe=0 after attach".to_owned());
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+
+        if attempt < ATTACH_ALL_ATTEMPTS {
+            thread::sleep(ATTACH_ALL_RETRY_DELAY);
+        }
+    }
+
+    Err(io::Error::other(
+        last_error.unwrap_or_else(|| "attach did not complete".to_owned()),
+    ))
+}
+
+fn list_panes_for_attach(session: Option<&str>) -> io::Result<Vec<PanePipe>> {
+    let mut args = vec!["list-panes".to_owned()];
+    match session {
+        Some(session) if !session.is_empty() => {
+            args.push("-s".to_owned());
+            args.push("-t".to_owned());
+            args.push(session.to_owned());
+        }
+        _ => {
+            args.push("-a".to_owned());
+        }
+    }
+    args.push("-F".to_owned());
+    args.push("#{pane_id}\t#{pane_pipe}".to_owned());
+
+    let output = Command::new("tmux").args(&args).output()?;
+    if !output.status.success() {
+        return Err(tmux_output_error(&args, &output));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_pane_pipe_line)
+        .collect())
+}
+
+fn list_panes_for_attach_with_retry(session: Option<&str>) -> io::Result<Vec<PanePipe>> {
+    let mut last_error = None;
+
+    for attempt in 1..=ATTACH_ALL_ATTEMPTS {
+        match list_panes_for_attach(session) {
+            Ok(panes) if !panes.is_empty() => return Ok(panes),
+            Ok(_) => {
+                last_error = Some("no panes found".to_owned());
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+
+        if attempt < ATTACH_ALL_ATTEMPTS {
+            thread::sleep(ATTACH_ALL_RETRY_DELAY);
+        }
+    }
+
+    Err(io::Error::other(
+        last_error.unwrap_or_else(|| "could not list panes".to_owned()),
+    ))
+}
+
+fn parse_pane_pipe_line(line: &str) -> Option<PanePipe> {
+    let mut parts = line.split('\t');
+    let pane = parts.next()?.trim();
+    let pipe = parts.next()?.trim() == "1";
+
+    (!pane.is_empty()).then(|| PanePipe {
+        pane: pane.to_owned(),
+        pipe,
+    })
+}
+
+fn display_message(message: &str) {
+    let _ = Command::new("tmux")
+        .args(["display-message", message])
+        .status();
+}
+
+fn run_status<const N: usize>(args: [&str; N]) -> io::Result<()> {
+    let output = Command::new("tmux").args(args).output()?;
+
+    if output.status.success() {
         Ok(())
     } else {
-        Err(io::Error::other(format!(
-            "tmux command failed with status {status}"
-        )))
+        Err(tmux_output_error(&args, &output))
+    }
+}
+
+fn tmux_output_error<S: AsRef<str>>(args: &[S], output: &Output) -> io::Error {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let detail = [stderr.as_str(), stdout.as_str()]
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    let command = args.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" ");
+
+    if detail.is_empty() {
+        io::Error::other(format!(
+            "tmux {command} failed with status {}",
+            output.status
+        ))
+    } else {
+        io::Error::other(format!(
+            "tmux {command} failed with status {}: {detail}",
+            output.status
+        ))
     }
 }
 
@@ -450,6 +602,25 @@ mod tests {
                 focused: false,
             })
         );
+    }
+
+    #[test]
+    fn parses_pane_pipe_lines() {
+        assert_eq!(
+            parse_pane_pipe_line("%0\t0"),
+            Some(PanePipe {
+                pane: "%0".to_owned(),
+                pipe: false,
+            })
+        );
+        assert_eq!(
+            parse_pane_pipe_line("%1\t1"),
+            Some(PanePipe {
+                pane: "%1".to_owned(),
+                pipe: true,
+            })
+        );
+        assert_eq!(parse_pane_pipe_line("\t0"), None);
     }
 
     #[test]

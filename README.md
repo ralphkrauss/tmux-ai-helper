@@ -47,6 +47,7 @@ Verified from the source code:
 - Omits idle panes from the window summary unless they need attention.
 - Tracks hidden completions separately from completion state: `✅` means finished, `🔔` means finished while hidden.
 - Creates attention only when a pane transitions from active/paused to done/error while not visible.
+- Lets you manually mark a pane as needing attention again.
 - Clears attention when a pane becomes active again or when configured tmux hooks call `clear-pane`, `clear-window`, or `clear-session`.
 - Uses tmux focus reporting when available, so a selected tmux window in an unfocused terminal tab can still count as hidden.
 - Falls back to active-window visibility when focus reporting is unavailable.
@@ -64,7 +65,7 @@ Verified from the source code:
 - Suppresses attention and unread counts for held windows.
 - Stores hold key, label, and timestamp in tmux window options.
 - Marks an active or paused pane as done when its listener reaches EOF.
-- Provides explicit CLI commands for attach, listen, clear, hold, hold-clear, and hold-menu.
+- Provides explicit CLI commands for attach, attach-all, listen, mark-pane, clear, hold, hold-clear, and hold-menu.
 - Uses no third-party Rust crates.
 
 ## How It Feels
@@ -188,6 +189,7 @@ set -g @tmux_ai_helper_hold_state_review "👀 Review"
 set -g @tmux_ai_helper_hold_state_blocked "⛔ Blocked"
 set -g @tmux_ai_helper_hold_state_parked "📌 Parked"
 bind-key H run-shell -b '"#{@tmux_ai_helper_path}" hold-menu "#{pane_id}"'
+bind-key U run-shell -b '"#{@tmux_ai_helper_path}" mark-pane "#{pane_id}"'
 
 # Ring the attached terminal when hidden AI work completes. Add "command" here
 # to run @tmux_ai_helper_notify_command as well.
@@ -202,7 +204,7 @@ setw -g pane-border-format '#{?pane_active,#[reverse],}#{pane_index}#[default] "
 set -g status-right '#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}"#{=21:#{?#{@tmux_ai_helper_v1_display_title},#{@tmux_ai_helper_v1_display_title},#{pane_title}}}" %H:%M %d-%b-%y'
 
 # Attach the helper automatically to new panes.
-set-hook -g after-new-session 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; pane=\"#{pane_id}\"; test -z \"\$pane\" || test ! -x \"\$helper\" || \"\$helper\" attach \"\$pane\""'
+set-hook -g after-new-session 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; test ! -x \"\$helper\" || \"\$helper\" attach-all"'
 set-hook -g after-new-window 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; pane=\"#{pane_id}\"; test -z \"\$pane\" || test ! -x \"\$helper\" || \"\$helper\" attach \"\$pane\""'
 set-hook -g after-split-window 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; pane=\"#{pane_id}\"; test -z \"\$pane\" || test ! -x \"\$helper\" || \"\$helper\" attach \"\$pane\""'
 
@@ -214,7 +216,7 @@ set-hook -g client-attached 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; t
 set-hook -g client-focus-in 'run-shell -b "helper=\"#{@tmux_ai_helper_path}\"; test ! -x \"\$helper\" || \"\$helper\" clear-window \"#{window_id}\""'
 
 # Attach the helper to panes that already exist when the config is sourced.
-run-shell -b 'helper="#{@tmux_ai_helper_path}"; test ! -x "$helper" || tmux list-panes -a -F "##{pane_id}" | xargs -n 1 "$helper" attach'
+run-shell -b 'helper="#{@tmux_ai_helper_path}"; test ! -x "$helper" || "$helper" attach-all'
 ```
 
 Apply the config:
@@ -249,6 +251,16 @@ Window summaries are generated from the panes in that window:
 [⏳ 🔔❌ ⏸]
 [🔔 ✅]
 ```
+
+### Manual Attention
+
+If you visited a finished pane and want to mark it unread again, run:
+
+```sh
+tmux-ai-helper mark-pane <pane-id>
+```
+
+The recommended setup binds this to `prefix U` for the current pane.
 
 ### Terminal Title Modes
 
@@ -351,7 +363,9 @@ Notification backend names can be separated by spaces or commas.
 
 ```text
 tmux-ai-helper attach <pane-id>
+tmux-ai-helper attach-all [session-id]
 tmux-ai-helper listen <pane-id>
+tmux-ai-helper mark-pane <pane-id>
 tmux-ai-helper clear-pane <pane-id>
 tmux-ai-helper clear-window <window-id>
 tmux-ai-helper clear-session <session-id>
@@ -360,7 +374,7 @@ tmux-ai-helper hold-clear [window-id]
 tmux-ai-helper hold-menu [pane-id|window-id]
 ```
 
-Most users call `attach`, `clear-*`, `hold`, `hold-clear`, or `hold-menu` through tmux hooks and key bindings. `listen` is the internal command run by `pipe-pane`.
+Most users call `attach`, `attach-all`, `mark-pane`, `clear-*`, `hold`, `hold-clear`, or `hold-menu` through tmux hooks and key bindings. `listen` is the internal command run by `pipe-pane`.
 
 ## tmux State Options
 
@@ -473,6 +487,14 @@ tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} pipe=#{pane
 ```
 
 `pipe=1` means a pane has a `pipe-pane` listener attached.
+
+If any pane reports `pipe=0`, run the catch-up attach command:
+
+```sh
+tmux-ai-helper attach-all
+```
+
+`attach-all` retries startup attachment briefly and reports pane-specific failures with tmux error output when a pane cannot be attached.
 
 Inspect hold state across all windows:
 

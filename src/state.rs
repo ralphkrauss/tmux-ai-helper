@@ -50,31 +50,54 @@ impl PaneState {
         let stored_source = tmux::get_pane_option(pane, tmux::OPT_SOURCE)
             .as_deref()
             .and_then(ActivitySource::from_str);
+        let raw_activity = parsed.activity;
+        let raw_has_activity = raw_activity.is_some();
 
-        let base_title = first_non_empty([
-            stored_base.as_deref().unwrap_or_default(),
-            parsed_display
-                .as_ref()
-                .map(|parsed| parsed.base.as_str())
-                .unwrap_or_default(),
-            parsed.base.as_str(),
-            window_name.as_str(),
-        ])
+        let base_title = if raw_has_activity {
+            first_non_empty([
+                parsed.base.as_str(),
+                stored_base.as_deref().unwrap_or_default(),
+                parsed_display
+                    .as_ref()
+                    .map(|parsed| parsed.base.as_str())
+                    .unwrap_or_default(),
+                window_name.as_str(),
+            ])
+        } else {
+            first_non_empty([
+                stored_base.as_deref().unwrap_or_default(),
+                parsed_display
+                    .as_ref()
+                    .map(|parsed| parsed.base.as_str())
+                    .unwrap_or_default(),
+                parsed.base.as_str(),
+                window_name.as_str(),
+            ])
+        }
         .unwrap_or(FALLBACK_TITLE)
         .to_owned();
 
-        let activity = stored_activity
+        let activity = raw_activity
+            .or(stored_activity)
             .or(parsed_display_activity)
-            .or(parsed.activity)
             .unwrap_or(Activity::Idle);
-        let attention = stored_attention
-            .or_else(|| parsed_display.as_ref().map(|parsed| parsed.attention))
-            .unwrap_or(parsed.attention);
-        let source = stored_source.or_else(|| {
-            (parsed_display_activity == Some(Activity::Active)
-                || parsed.activity == Some(Activity::Active))
-            .then_some(ActivitySource::TitleSpinner)
-        });
+        let attention = if raw_activity == Some(Activity::Active) {
+            false
+        } else {
+            stored_attention
+                .or_else(|| parsed_display.as_ref().map(|parsed| parsed.attention))
+                .unwrap_or(parsed.attention)
+        };
+        let source = if raw_activity == Some(Activity::Active) {
+            Some(ActivitySource::TitleSpinner)
+        } else if raw_has_activity {
+            None
+        } else {
+            stored_source.or_else(|| {
+                (parsed_display_activity == Some(Activity::Active))
+                    .then_some(ActivitySource::TitleSpinner)
+            })
+        };
 
         Self {
             pane: pane.to_owned(),
@@ -83,9 +106,13 @@ impl PaneState {
             attention,
             source,
             saw_osc94: false,
-            percent: stored_percent
-                .or_else(|| parsed_display.as_ref().and_then(|parsed| parsed.percent))
-                .or(parsed.percent),
+            percent: if raw_has_activity {
+                parsed.percent
+            } else {
+                stored_percent
+                    .or_else(|| parsed_display.as_ref().and_then(|parsed| parsed.percent))
+                    .or(parsed.percent)
+            },
             displayed_title: stored_display_title,
             persisted: None,
         }
@@ -307,6 +334,12 @@ pub fn clear_pane(pane: &str) -> io::Result<()> {
 
     let mut state = PaneState::new(pane);
     state.attention = false;
+    state.apply_title()
+}
+
+pub fn mark_pane(pane: &str) -> io::Result<()> {
+    let mut state = PaneState::new(pane);
+    state.attention = true;
     state.apply_title()
 }
 

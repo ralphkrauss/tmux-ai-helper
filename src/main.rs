@@ -35,9 +35,17 @@ fn run() -> io::Result<()> {
             let pane = required_arg(args.next(), "missing pane id for attach")?;
             tmux::attach(&pane)
         }
+        Some("attach-all") => {
+            let target = optional_arg(args.next())?;
+            tmux::attach_all(target.as_deref())
+        }
         Some("listen") => {
             let pane = required_arg(args.next(), "missing pane id for listen")?;
             state::listen(&pane)
+        }
+        Some("mark-pane") => {
+            let pane = required_arg(args.next(), "missing pane id for mark-pane")?;
+            state::mark_pane(&pane)
         }
         Some("clear-pane") => {
             let pane = required_arg(args.next(), "missing pane id for clear-pane")?;
@@ -91,6 +99,6 @@ fn optional_arg(arg: Option<OsString>) -> io::Result<Option<String>> {
 
 fn print_help() {
     eprintln!(
-        "usage:\n  tmux-ai-helper attach <pane-id>\n  tmux-ai-helper listen <pane-id>\n  tmux-ai-helper clear-pane <pane-id>\n  tmux-ai-helper clear-window <window-id>\n  tmux-ai-helper clear-session <session-id>\n  tmux-ai-helper hold <state-key> [window-id]\n  tmux-ai-helper hold-clear [window-id]\n  tmux-ai-helper hold-menu [pane-id|window-id]"
+        "usage:\n  tmux-ai-helper attach <pane-id>\n  tmux-ai-helper attach-all [session-id]\n  tmux-ai-helper listen <pane-id>\n  tmux-ai-helper mark-pane <pane-id>\n  tmux-ai-helper clear-pane <pane-id>\n  tmux-ai-helper clear-window <window-id>\n  tmux-ai-helper clear-session <session-id>\n  tmux-ai-helper hold <state-key> [window-id]\n  tmux-ai-helper hold-clear [window-id]\n  tmux-ai-helper hold-menu [pane-id|window-id]"
     );
 }
