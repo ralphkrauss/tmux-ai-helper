@@ -78,6 +78,29 @@ pub fn attach_all(session: Option<&str>) -> io::Result<()> {
     }
 }
 
+pub fn doctor(session: Option<&str>) -> io::Result<()> {
+    let panes = list_panes_for_attach_with_retry(session)?;
+    let missing = panes
+        .iter()
+        .filter(|pane| !pane.pipe)
+        .map(|pane| pane.pane.as_str())
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() {
+        eprintln!("tmux-ai-helper: all panes have pipe-pane listeners");
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "panes without pipe-pane listeners: {}. Run `tmux-ai-helper attach-all{}` to recover.",
+            missing.join(", "),
+            session
+                .filter(|target| !target.is_empty())
+                .map(|target| format!(" {target}"))
+                .unwrap_or_default()
+        )))
+    }
+}
+
 pub fn read_format(target: &str, format: &str) -> Option<String> {
     let output = Command::new("tmux")
         .args(["display-message", "-p", "-t", target, format])

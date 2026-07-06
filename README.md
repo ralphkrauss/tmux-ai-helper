@@ -364,6 +364,7 @@ Notification backend names can be separated by spaces or commas.
 ```text
 tmux-ai-helper attach <pane-id>
 tmux-ai-helper attach-all [session-id]
+tmux-ai-helper doctor [session-id]
 tmux-ai-helper listen <pane-id>
 tmux-ai-helper mark-pane <pane-id>
 tmux-ai-helper clear-pane <pane-id>
@@ -375,6 +376,15 @@ tmux-ai-helper hold-menu [pane-id|window-id]
 ```
 
 Most users call `attach`, `attach-all`, `mark-pane`, `clear-*`, `hold`, `hold-clear`, or `hold-menu` through tmux hooks and key bindings. `listen` is the internal command run by `pipe-pane`.
+
+Use `doctor` when an existing pane looks stale after sourcing the config:
+
+```sh
+tmux-ai-helper doctor
+tmux-ai-helper attach-all
+```
+
+`doctor` exits successfully when every pane has a `pipe-pane` listener. If any pane still reports `#{pane_pipe}=0`, it lists those pane ids so you can recover with `attach-all` or `attach <pane-id>`.
 
 ## tmux State Options
 
