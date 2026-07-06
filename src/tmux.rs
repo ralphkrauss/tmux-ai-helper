@@ -150,6 +150,10 @@ pub fn current_window_id() -> Option<String> {
     read_current_format("#{window_id}")
 }
 
+pub fn current_pane_id() -> Option<String> {
+    read_current_format("#{pane_id}")
+}
+
 pub fn session_id_for_target(target: &str) -> Option<String> {
     read_format(target, "#{session_id}")
 }

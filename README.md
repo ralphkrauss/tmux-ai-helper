@@ -257,10 +257,12 @@ Window summaries are generated from the panes in that window:
 If you visited a finished pane and want to mark it unread again, run:
 
 ```sh
+tmux-ai-helper bell
+# or explicitly:
 tmux-ai-helper mark-pane <pane-id>
 ```
 
-The recommended setup binds this to `prefix U` for the current pane.
+`bell` and `mark-pane` both mark a pane as needing attention again. With no argument, they target the current tmux pane. The recommended setup binds this to `prefix U` for the current pane.
 
 ### Terminal Title Modes
 
@@ -365,7 +367,8 @@ Notification backend names can be separated by spaces or commas.
 tmux-ai-helper attach <pane-id>
 tmux-ai-helper attach-all [session-id]
 tmux-ai-helper listen <pane-id>
-tmux-ai-helper mark-pane <pane-id>
+tmux-ai-helper mark-pane [pane-id]
+tmux-ai-helper bell [pane-id]
 tmux-ai-helper clear-pane <pane-id>
 tmux-ai-helper clear-window <window-id>
 tmux-ai-helper clear-session <session-id>

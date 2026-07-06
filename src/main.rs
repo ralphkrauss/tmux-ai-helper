@@ -44,7 +44,11 @@ fn run() -> io::Result<()> {
             state::listen(&pane)
         }
         Some("mark-pane") => {
-            let pane = required_arg(args.next(), "missing pane id for mark-pane")?;
+            let pane = optional_pane(args.next(), "could not resolve current tmux pane")?;
+            state::mark_pane(&pane)
+        }
+        Some("bell") => {
+            let pane = optional_pane(args.next(), "could not resolve current tmux pane")?;
             state::mark_pane(&pane)
         }
         Some("clear-pane") => {
@@ -97,8 +101,15 @@ fn optional_arg(arg: Option<OsString>) -> io::Result<Option<String>> {
     .transpose()
 }
 
+fn optional_pane(arg: Option<OsString>, message: &'static str) -> io::Result<String> {
+    match optional_arg(arg)? {
+        Some(pane) => Ok(pane),
+        None => tmux::current_pane_id().ok_or_else(|| io::Error::other(message)),
+    }
+}
+
 fn print_help() {
     eprintln!(
-        "usage:\n  tmux-ai-helper attach <pane-id>\n  tmux-ai-helper attach-all [session-id]\n  tmux-ai-helper listen <pane-id>\n  tmux-ai-helper mark-pane <pane-id>\n  tmux-ai-helper clear-pane <pane-id>\n  tmux-ai-helper clear-window <window-id>\n  tmux-ai-helper clear-session <session-id>\n  tmux-ai-helper hold <state-key> [window-id]\n  tmux-ai-helper hold-clear [window-id]\n  tmux-ai-helper hold-menu [pane-id|window-id]"
+        "usage:\n  tmux-ai-helper attach <pane-id>\n  tmux-ai-helper attach-all [session-id]\n  tmux-ai-helper listen <pane-id>\n  tmux-ai-helper mark-pane [pane-id]\n  tmux-ai-helper bell [pane-id]\n  tmux-ai-helper clear-pane <pane-id>\n  tmux-ai-helper clear-window <window-id>\n  tmux-ai-helper clear-session <session-id>\n  tmux-ai-helper hold <state-key> [window-id]\n  tmux-ai-helper hold-clear [window-id]\n  tmux-ai-helper hold-menu [pane-id|window-id]"
     );
 }
