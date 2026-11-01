@@ -182,9 +182,11 @@ impl PaneState {
                 }
             }
             Some(activity @ (Activity::Done | Activity::Error | Activity::Paused)) => {
-                self.activity = activity;
-                self.source = None;
-                self.percent = parsed.percent;
+                if title_may_set_activity(self.saw_osc94, self.source) {
+                    self.activity = activity;
+                    self.source = None;
+                    self.percent = parsed.percent;
+                }
             }
             Some(Activity::Idle) => {
                 self.activity = Activity::Idle;
@@ -433,9 +435,27 @@ fn attention_transition(
     }
 }
 
+// Once a pane reports OSC 9;4 progress, that is the source of truth: Claude Code
+// keeps its "done" title prefix for the whole turn when it emits progress.
+fn title_may_set_activity(saw_osc94: bool, source: Option<ActivitySource>) -> bool {
+    !saw_osc94 && source != Some(ActivitySource::Osc94)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles_do_not_override_osc_progress() {
+        assert!(title_may_set_activity(false, None));
+        assert!(title_may_set_activity(
+            false,
+            Some(ActivitySource::TitleSpinner)
+        ));
+        assert!(!title_may_set_activity(false, Some(ActivitySource::Osc94)));
+        assert!(!title_may_set_activity(true, None));
+        assert!(!title_may_set_activity(true, Some(ActivitySource::Osc94)));
+    }
 
     #[test]
     fn attention_only_starts_on_hidden_completion() {
