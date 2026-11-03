@@ -12,6 +12,8 @@ Use it when you run multiple coding agents in tmux and want the terminal to tell
 - how many unread agent completions are waiting in the session
 - which work windows are intentionally parked, blocked, in review, or waiting on tests
 
+> **Claude Code needs one setting on every machine.** Without it, Claude panes show ✅ even while Claude is working. See [Claude Code Setup](#claude-code-setup-required).
+
 ## Features
 
 Verified from the source code:
@@ -24,7 +26,7 @@ Verified from the source code:
 - Recognizes active progress, optional `0..100` percent values, clear/done/inactive/completed, error/failed, and pause/paused states.
 - Parses `OSC 0` and `OSC 2` terminal title updates.
 - Detects native Codex braille spinner prefixes.
-- Detects Claude Code title state prefixes for active work and done state.
+- Detects Claude Code title state prefixes for active work and done state. Current Claude Code versions keep a static `✳` title while working, so Claude needs `OSC 9;4`; see [Claude Code Setup](#claude-code-setup-required).
 - Detects several common spinner prefixes used by other terminal tools.
 - Gives `OSC 9;4` progress precedence over native title spinner updates once OSC progress has appeared in a pane.
 - Chooses a stable base title from stored helper state, parsed title state, the tmux window name, or the `shell` fallback.
@@ -226,6 +228,59 @@ tmux source-file ~/.tmux.conf
 ```
 
 If you enabled `focus-events` for an already attached tmux client, detach and attach once after sourcing. tmux requests focus reporting when the client attaches.
+
+## Claude Code Setup (Required)
+
+Do this on **every machine** that runs Claude Code inside tmux. The helper on its own is not enough.
+
+### Why
+
+- Claude Code no longer animates its terminal title. It shows a static `✳ <title>` while working and when done, and the helper reads `✳` as done.
+- Claude Code reports work through `OSC 9;4` progress, but only when it recognizes the terminal from `TERM_PROGRAM`.
+- tmux sets `TERM_PROGRAM=tmux` in every pane, and `set-environment -g TERM_PROGRAM ...` cannot override it. So Claude in tmux sends no progress at all, and the pane shows ✅ permanently.
+
+### Fix
+
+Set `TERM_PROGRAM` in Claude Code's own settings so Claude sees a terminal it supports:
+
+```json
+{
+  "env": {
+    "TERM_PROGRAM": "ghostty"
+  },
+  "progressReporting": true
+}
+```
+
+Merge these keys into every Claude settings file in use on the machine:
+
+| Setup | File |
+|---|---|
+| Plain `claude` | `~/.claude/settings.json` |
+| [ccs](https://github.com/kaitranntt/ccs) profiles | `~/.ccs/shared/settings.json` (each `~/.ccs/instances/*/settings.json` is a symlink to it) |
+| Custom `CLAUDE_CONFIG_DIR` | `$CLAUDE_CONFIG_DIR/settings.json` |
+
+Then restart Claude sessions. A session that is already running keeps the old behavior.
+
+`ghostty` is the verified value. With it, Claude sends `9;4;3` (busy) when a turn starts and `9;4;0` (clear) when it ends, which the helper shows as ⏳ and then ✅. Side effect: Claude, and the commands it runs, see `TERM_PROGRAM=ghostty`.
+
+Codex needs no setup; it still animates its title.
+
+### Check
+
+Every settings file should print `ghostty`:
+
+```sh
+grep -H '"TERM_PROGRAM"' ~/.claude/settings.json ~/.ccs/shared/settings.json 2>/dev/null
+```
+
+While Claude is working, its pane should show ⏳:
+
+```sh
+tmux list-panes -a -F '#{pane_id} #{@tmux_ai_helper_v1_display_title}'
+```
+
+Verified 2026-11-03 with Claude Code 2.1.310, 2.1.316 and 2.1.317, tmux 3.6a, and Ghostty 1.4.0 on macOS. Re-check after a Claude Code update if panes stop showing ⏳.
 
 ## Configuration
 
@@ -508,6 +563,8 @@ tmux-ai-helper attach-all
 ```
 
 `attach-all` retries startup attachment briefly and reports pane-specific failures with tmux error output when a pane cannot be attached.
+
+If a Claude pane shows ✅ while Claude is working, and `pipe=1`, the machine is missing the `TERM_PROGRAM` setting, or the Claude session started before it was added. See [Claude Code Setup](#claude-code-setup-required).
 
 Inspect hold state across all windows:
 
