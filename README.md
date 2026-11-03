@@ -12,7 +12,7 @@ Use it when you run multiple coding agents in tmux and want the terminal to tell
 - how many unread agent completions are waiting in the session
 - which work windows are intentionally parked, blocked, in review, or waiting on tests
 
-> **Claude Code needs one setting on every machine.** Without it, Claude panes show ✅ even while Claude is working. See [Claude Code Setup](#claude-code-setup-required).
+> **Claude Code and opencode each need a one-time setup on every machine.** Without it, their panes never show ⏳ while working. See [Claude Code Setup](#claude-code-setup-required) and [opencode Setup](#opencode-setup-required).
 
 ## Features
 
@@ -281,6 +281,48 @@ tmux list-panes -a -F '#{pane_id} #{@tmux_ai_helper_v1_display_title}'
 ```
 
 Verified 2026-11-03 with Claude Code 2.1.310, 2.1.316 and 2.1.317, tmux 3.6a, and Ghostty 1.4.0 on macOS. Re-check after a Claude Code update if panes stop showing ⏳.
+
+## opencode Setup (Required)
+
+Do this on **every machine** that runs opencode inside tmux.
+
+### Why
+
+opencode has no native busy signal. Its terminal title is only ever `OpenCode` or `OC | <session>`, and it never sends `OSC 9;4`, in any terminal. No setting turns this on, so without the plugin the helper cannot tell that opencode is working.
+
+### Fix
+
+Install the bundled plugin [`contrib/opencode/tmux-progress.js`](contrib/opencode/tmux-progress.js). It listens for opencode's own `session.status` events and writes `OSC 9;4` progress to the terminal: `9;4;3` while any session is busy, and `9;4;0` once all are idle. The helper then shows ⏳ and ✅, just as it does for Claude Code.
+
+From the repository root:
+
+```sh
+mkdir -p ~/.config/opencode/plugins
+install -m 0644 contrib/opencode/tmux-progress.js ~/.config/opencode/plugins/tmux-progress.js
+```
+
+Then restart opencode. A session that is already running does not load new plugins.
+
+opencode loads every `.js` and `.ts` file in `plugins/` and `plugin/` under its config directory (`~/.config/opencode`, or `$OPENCODE_CONFIG_DIR` if set). Install the plugin in only one of those folders, or it runs twice. Reinstall it after pulling changes to this repository.
+
+Known limits:
+
+- A pane waiting for a permission answer probably stays ⏳ instead of showing 🔔. This is untested.
+- The plugin writes to the terminal alongside opencode's own drawing. No glitches were seen in testing.
+
+### Check
+
+```sh
+ls ~/.config/opencode/plugins/tmux-progress.js
+```
+
+While opencode is working, its pane should show ⏳:
+
+```sh
+tmux list-panes -a -F '#{pane_id} #{@tmux_ai_helper_v1_display_title}'
+```
+
+Verified 2026-11-03 with opencode 1.19.5, tmux 3.6a, and Ghostty 1.4.0 on macOS.
 
 ## Configuration
 
@@ -565,6 +607,8 @@ tmux-ai-helper attach-all
 `attach-all` retries startup attachment briefly and reports pane-specific failures with tmux error output when a pane cannot be attached.
 
 If a Claude pane shows ✅ while Claude is working, and `pipe=1`, the machine is missing the `TERM_PROGRAM` setting, or the Claude session started before it was added. See [Claude Code Setup](#claude-code-setup-required).
+
+If an opencode pane never shows ⏳, the plugin is not installed, or opencode started before it was. See [opencode Setup](#opencode-setup-required).
 
 Inspect hold state across all windows:
 
